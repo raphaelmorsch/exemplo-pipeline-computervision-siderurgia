@@ -1,0 +1,105 @@
+# PIPELINE DEFINITION
+# Name: pipeline-visao-computacional
+# Inputs:
+#    dataset_path: str [Default: '/mnt/data/dataset-imagens/']
+#    mlflow_tracking_uri: str [Default: 'http://mlflow-server:5000']
+components:
+  comp-train-model:
+    executorLabel: exec-train-model
+    inputDefinitions:
+      parameters:
+        dataset_path:
+          parameterType: STRING
+        mlflow_tracking_uri:
+          parameterType: STRING
+    outputDefinitions:
+      artifacts:
+        model_output:
+          artifactType:
+            schemaTitle: system.Model
+            schemaVersion: 0.0.1
+deploymentSpec:
+  executors:
+    exec-train-model:
+      container:
+        args:
+        - --executor_input
+        - '{{$}}'
+        - --function_to_execute
+        - train_model
+        command:
+        - sh
+        - -c
+        - "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip ||\
+          \ python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1\
+          \ python3 -m pip install --quiet --no-warn-script-location 'kfp==2.9.0'\
+          \ '--no-deps' 'typing-extensions>=3.7.4,<5; python_version<\"3.9\"'  &&\
+          \  python3 -m pip install --quiet --no-warn-script-location 'torch' 'torchvision'\
+          \ 'mlflow' && \"$0\" \"$@\"\n"
+        - sh
+        - -ec
+        - 'program_path=$(mktemp -d)
+
+
+          printf "%s" "$0" > "$program_path/ephemeral_component.py"
+
+          _KFP_RUNTIME=true python3 -m kfp.dsl.executor_main                         --component_module_path                         "$program_path/ephemeral_component.py"                         "$@"
+
+          '
+        - "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import\
+          \ *\n\ndef train_model(mlflow_tracking_uri: str, dataset_path: str, model_output:\
+          \ Output[Model]):\n    import os\n    import mlflow\n    import mlflow.pytorch\n\
+          \    import torch\n    import torchvision.models as models\n    from torchvision.datasets\
+          \ import ImageFolder\n    from torchvision.transforms import ToTensor, Compose,\
+          \ Resize\n    from torch.utils.data import DataLoader\n    from torch import\
+          \ nn, optim\n\n    # Set MLflow Tracking\n    mlflow.set_tracking_uri(mlflow_tracking_uri)\n\
+          \    mlflow.set_experiment(\"defeito-visao-computacional\")\n\n    with\
+          \ mlflow.start_run():\n        # Load dataset\n        transform = Compose([Resize((224,\
+          \ 224)), ToTensor()])\n        dataset = ImageFolder(root=dataset_path,\
+          \ transform=transform)\n        loader = DataLoader(dataset, batch_size=32,\
+          \ shuffle=True)\n\n        # Modelo ResNet pr\xE9-treinado\n        model\
+          \ = models.resnet50(pretrained=True)\n        model.fc = nn.Linear(model.fc.in_features,\
+          \ len(dataset.classes))\n\n        # Treinamento simples\n        criterion\
+          \ = nn.CrossEntropyLoss()\n        optimizer = optim.Adam(model.parameters(),\
+          \ lr=0.001)\n        epochs = 1  # Para demo r\xE1pida\n\n        model.train()\n\
+          \        for epoch in range(epochs):\n            running_loss = 0.0\n \
+          \           for inputs, labels in loader:\n                optimizer.zero_grad()\n\
+          \                outputs = model(inputs)\n                loss = criterion(outputs,\
+          \ labels)\n                loss.backward()\n                optimizer.step()\n\
+          \                running_loss += loss.item()\n\n        # Log metrics e\
+          \ modelo\n        mlflow.log_param(\"epochs\", epochs)\n        mlflow.log_param(\"\
+          model\", \"resnet50\")\n        mlflow.log_metric(\"loss\", running_loss)\n\
+          \n        # Salva o modelo\n        model_path = os.path.join(model_output.path,\
+          \ \"model\")\n        mlflow.pytorch.save_model(model, model_path)\n   \
+          \     print(f\"Modelo salvo em: {model_path}\")\n\n"
+        image: python:3.8
+pipelineInfo:
+  name: pipeline-visao-computacional
+root:
+  dag:
+    tasks:
+      train-model:
+        cachingOptions:
+          enableCache: true
+        componentRef:
+          name: comp-train-model
+        inputs:
+          parameters:
+            dataset_path:
+              componentInputParameter: dataset_path
+            mlflow_tracking_uri:
+              componentInputParameter: mlflow_tracking_uri
+        taskInfo:
+          name: train-model
+  inputDefinitions:
+    parameters:
+      dataset_path:
+        defaultValue: /mnt/data/dataset-imagens/
+        isOptional: true
+        parameterType: STRING
+      mlflow_tracking_uri:
+        defaultValue: http://mlflow-server:5000
+        isOptional: true
+        parameterType: STRING
+schemaVersion: 2.1.0
+sdkVersion: kfp-2.9.0
